@@ -7,3 +7,7 @@ db.sqlite3
 # text files
 Superuser_Details.txt
 Gemini_API_Key_NeuraQuiz.txt
+
+#pycache
+__pycache__/
+*.pyc
