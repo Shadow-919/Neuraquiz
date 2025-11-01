@@ -3,3 +3,7 @@ mysqlclient==2.2.4
 python-dotenv==1.0.0
 google-generativeai==0.3.2
 Pillow==10.4.0
+gunicorn
+python-dotenv
+dj-database-url
+psycopg2-binary

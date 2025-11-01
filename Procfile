@@ -1,0 +1,1 @@
+web: gunicorn NeuraQuiz__Website_Project.wsgi
