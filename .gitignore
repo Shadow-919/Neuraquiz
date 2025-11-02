@@ -1,5 +1,6 @@
 # Database
 db.sqlite3
+db.sqlite3.backup
 
 # Environment variables
 .env
