@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: neuraquiz
+    env: python
+    buildCommand: |
+      pip install -r requirements.txt
+      python manage.py collectstatic --noinput
+      python manage.py migrate
+      python manage.py loaddata data.json
+    startCommand: gunicorn neuraquiz.wsgi:application
