@@ -9,12 +9,12 @@
 ## ✨ Key Features
 
 - **AI Question Generation:** Dynamically creates unique quiz questions using Gemini AI.  
-**Multiple Difficulty Levels:** Choose from beginner to expert quizzes.  
-**Persistent Database:** Cloud PostgreSQL hosted on Aiven (free & permanent).  
-**User Management:** Secure login, admin panel, and quiz progress tracking.  
-**Modern Interface:** Built with responsive HTML, CSS, and JavaScript frontend.
-**Smart Analytics:** Gain AI-powered insights into your quiz performance with personalized improvement tips.
-**Role-Based Access:** Separate dashboards and tools for students and instructors for a smoother experience.
+- **Multiple Difficulty Levels:** Choose from beginner to expert quizzes.  
+- **Persistent Database:** Cloud PostgreSQL hosted on Aiven (free & permanent).  
+- **User Management:** Secure login, admin panel, and quiz progress tracking.  
+- **Modern Interface:** Built with responsive HTML, CSS, and JavaScript frontend.
+- **Smart Analytics:** Gain AI-powered insights into your quiz performance with personalized improvement tips.
+- **Role-Based Access:** Separate dashboards and tools for students and instructors for a smoother experience.
 
 ---
 
