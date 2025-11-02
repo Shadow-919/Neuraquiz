@@ -10,4 +10,4 @@ Gemini_API_Key_NeuraQuiz.txt
 
 #pycache
 __pycache__/
-*.pyc
+*.pycquiz/management/commands/createsu.py
