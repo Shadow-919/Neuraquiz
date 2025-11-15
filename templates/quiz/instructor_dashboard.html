@@ -76,8 +76,8 @@
     <!-- My Quizzes Section -->
     <div class="row mb-5">
         <div class="col-12">
-            <div class="section-header d-flex justify-content-between align-items-center mb-4">
-                <div class="d-flex align-items-center gap-3">
+            <div class="section-header d-flex justify-content-between align-items-center mb-4 flex-wrap gap-3">
+                <div class="d-flex align-items-center gap-3 flex-wrap">
                     <h2 class="fw-bold mb-0">
                         <i class="fas fa-folder-open me-2 text-primary"></i>My Quizzes
                     </h2>
@@ -89,7 +89,7 @@
                     </div>
                     {% endif %}
                 </div>
-                <a href="{% url 'quiz:create_quiz' %}" class="btn btn-primary btn-lg">
+                <a href="{% url 'quiz:create_quiz' %}" class="btn btn-primary w-100 w-md-auto create-quiz-btn">
                     <i class="fas fa-plus me-2"></i>Create Quiz
                 </a>
             </div>
@@ -346,6 +346,29 @@ document.getElementById('deleteQuizForm').addEventListener('submit', function(e)
     font-size: 1rem;
     letter-spacing: 0.1em;
     box-shadow: 0 2px 8px rgba(13, 202, 240, 0.3);
+}
+
+/* Make Create Quiz button compact horizontally but taller vertically on desktop only */
+@media (min-width: 768px) {
+    .create-quiz-btn {
+        padding: 0.625rem 1.25rem !important;
+        font-size: 0.875rem;
+        white-space: nowrap;
+        min-width: auto !important;
+        width: auto !important;
+        max-width: fit-content !important;
+        flex-shrink: 0 !important;
+        flex-grow: 0 !important;
+        align-self: flex-start;
+    }
+}
+
+/* Ensure button is full width on mobile */
+@media (max-width: 767px) {
+    .create-quiz-btn {
+        width: 100% !important;
+        padding: 0.75rem 1.5rem;
+    }
 }
 </style>
 {% endblock %}

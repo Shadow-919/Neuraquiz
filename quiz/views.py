@@ -259,7 +259,7 @@ def quiz_stats(request, quiz_id):
 
 @login_required
 def cancel_ai_generation(request, quiz_id):
-    """Cancel an ongoing AI generation for a quiz"""
+    """Cancel an ongoing AI generation for a quiz and delete any partially generated questions"""
     quiz = get_object_or_404(Quiz, id=quiz_id)
     
     # Check permissions
@@ -272,7 +272,26 @@ def cancel_ai_generation(request, quiz_id):
         cancel_key = f'cancel_ai_{quiz.id}'
         cache.set(cancel_key, True, timeout=60)
         
-        return JsonResponse({'success': True, 'message': 'Cancellation requested'})
+        # Get the base order count before generation started (approximate)
+        # We'll delete AI-generated questions that were likely created during this generation
+        # To be safe, we'll delete the most recent AI-generated questions
+        recent_ai_questions = quiz.questions.filter(ai_generated=True).order_by('-created_at')[:20]
+        
+        # Delete recent AI-generated questions (likely from the cancelled generation)
+        deleted_count = 0
+        for question in recent_ai_questions:
+            # Only delete if created very recently (within last 5 minutes)
+            from django.utils import timezone
+            from datetime import timedelta
+            if question.created_at > timezone.now() - timedelta(minutes=5):
+                question.delete()
+                deleted_count += 1
+        
+        return JsonResponse({
+            'success': True, 
+            'message': 'Cancellation requested',
+            'deleted_questions': deleted_count
+        })
     
     return JsonResponse({'error': 'Invalid request method'}, status=405)
 
@@ -312,6 +331,8 @@ def generate_ai_questions(request, quiz_id):
         return JsonResponse({'pending': True, 'message': 'AI generation already running. Please wait.'}, status=202)
 
     cancel_key = f'cancel_ai_{quiz.id}'
+    # Clear any existing cancel flag
+    cache.delete(cancel_key)
     generated_questions = []
 
     try:
@@ -322,37 +343,48 @@ def generate_ai_questions(request, quiz_id):
             return JsonResponse({'error': 'Generation was cancelled', 'cancelled': True}, status=400)
 
         # Generate questions via Gemini
-        if use_demo:
-            generated_questions = gemini_service.generate_questions_demo(topic=topic, num_questions=num_questions, difficulty=difficulty)
-        else:
-            generated_questions = gemini_service.generate_questions(
-                topic=topic,
-                num_questions=num_questions,
-                difficulty=difficulty,
-                additional_instructions=additional_instructions,
-                debug_save=data.get('debug_save', False)
-            )
+        try:
+            if use_demo:
+                generated_questions = gemini_service.generate_questions_demo(topic=topic, num_questions=num_questions, difficulty=difficulty)
+            else:
+                generated_questions = gemini_service.generate_questions(
+                    topic=topic,
+                    num_questions=num_questions,
+                    difficulty=difficulty,
+                    additional_instructions=additional_instructions,
+                    debug_save=data.get('debug_save', False)
+                )
+        except Exception as gen_err:
+            logger.exception(f"Error calling Gemini API for quiz {quiz.id}: {gen_err}")
+            cache.delete(lock_key)
+            return JsonResponse({'error': f'AI service error: {str(gen_err)}'}, status=503)
 
-        if not generated_questions:
-            return JsonResponse({'error': 'AI returned no questions.'}, status=503)
+        if not generated_questions or len(generated_questions) == 0:
+            logger.warning(f"Gemini API returned no questions for quiz {quiz.id}")
+            cache.delete(lock_key)
+            return JsonResponse({'error': 'AI returned no questions. Please check your API key and try again.'}, status=503)
 
         # Prevent over-generation (some Gemini outputs more)
         generated_questions = generated_questions[:num_questions]
 
-        # Check again to ensure no new AI questions were saved by another concurrent request
-        existing_ai_count = quiz.questions.filter(ai_generated=True).count()
-        if existing_ai_count >= num_questions:
-            logger.info(f"Skipped duplicate generation for quiz {quiz.id} (already generated).")
-            return JsonResponse({'duplicate': True, 'message': 'AI questions already generated.'}, status=200)
+        # Note: We removed the duplicate check here because users should be able to generate more questions
+        # even if some already exist. The lock mechanism prevents concurrent generation.
 
         # Save questions
         saved_questions = []
         base_order = quiz.questions.count()
         seen_texts = set()
+        saved_question_ids = []  # Track saved question IDs for cancellation cleanup
 
         for i, q_data in enumerate(generated_questions):
+            # Check for cancellation before processing each question
             if cache.get(cancel_key):
-                break
+                # Delete any questions that were already saved before cancellation
+                if saved_question_ids:
+                    Question.objects.filter(id__in=saved_question_ids).delete()
+                cache.delete(cancel_key)
+                cache.delete(lock_key)
+                return JsonResponse({'error': 'Generation was cancelled', 'cancelled': True}, status=400)
 
             qtext = (q_data.get('question_text') or '').strip().lower()
             if not qtext or qtext in seen_texts:
@@ -365,10 +397,10 @@ def generate_ai_questions(request, quiz_id):
                 question_type=q_data['question_type'],
                 correct_answer=q_data['correct_answer'],
                 explanation=q_data.get('explanation', ''),
-                difficulty_score=int(float(q_data.get('difficulty_score', 3.0))) if q_data.get('difficulty_score') else 3,
                 order=base_order + len(saved_questions),
                 ai_generated=True
             )
+            saved_question_ids.append(question.id)  # Track for potential deletion
 
             if q_data.get('question_type') in ['mcq_single', 'mcq_multiple']:
                 choices = q_data.get('choices', []) or []
@@ -385,6 +417,21 @@ def generate_ai_questions(request, quiz_id):
                         is_correct=(j in correct_indices),
                         order=j
                     )
+            elif q_data.get('question_type') == 'true_false':
+                # Create True and False choices for true/false questions
+                correct_answer = str(q_data.get('correct_answer', '')).lower().strip()
+                Choice.objects.create(
+                    question=question,
+                    choice_text='True',
+                    is_correct=(correct_answer == 'true'),
+                    order=0
+                )
+                Choice.objects.create(
+                    question=question,
+                    choice_text='False',
+                    is_correct=(correct_answer == 'false'),
+                    order=1
+                )
 
             AIMetadata.objects.create(
                 question=question,
@@ -398,25 +445,43 @@ def generate_ai_questions(request, quiz_id):
             if len(saved_questions) >= num_questions:
                 break
 
-        quiz.is_ai_generated = True
-        quiz.save()
-
-        return JsonResponse({
-            'success': True,
-            'questions': saved_questions,
-            'message': f'Generated {len(saved_questions)} questions successfully!'
-        })
+        # Only mark as AI generated and return success if questions were actually saved
+        if len(saved_questions) > 0:
+            quiz.is_ai_generated = True
+            quiz.save()
+            return JsonResponse({
+                'success': True,
+                'questions': saved_questions,
+                'message': f'Generated {len(saved_questions)} questions successfully!'
+            })
+        else:
+            cache.delete(lock_key)
+            return JsonResponse({'error': 'No questions were saved. Please try again.'}, status=503)
 
     except RateLimitError as rl:
         retry = getattr(rl, "retry_after", None)
+        cache.delete(lock_key)
         return JsonResponse({'error': 'AI rate limit exceeded', 'retry_seconds': retry}, status=429)
 
     except Exception as e:
         logger.exception(f"AI generation failed for quiz {quiz.id}: {e}")
-        return JsonResponse({'error': 'AI generation failed'}, status=500)
+        # Delete any partially saved questions on error
+        if 'saved_question_ids' in locals() and saved_question_ids:
+            try:
+                Question.objects.filter(id__in=saved_question_ids).delete()
+            except Exception as del_err:
+                logger.error(f"Error deleting partial questions: {del_err}")
+        cache.delete(lock_key)
+        return JsonResponse({'error': f'AI generation failed: {str(e)}'}, status=500)
 
     finally:
-        cache.delete(lock_key)
+        # Always ensure lock is cleared when we exit (unless cancelled, which already deletes it)
+        try:
+            if not cache.get(cancel_key):
+                cache.delete(lock_key)
+                logger.debug(f"Cleared lock {lock_key} in finally block")
+        except Exception as lock_err:
+            logger.warning(f"Error clearing lock {lock_key}: {lock_err}")
 
 
 @login_required
@@ -491,19 +556,18 @@ def edit_question(request, question_id):
         elif question.question_type == 'mcq_multiple':
             multi = request.POST.getlist('correct_choices') or request.POST.getlist('correct_choice')
             question.correct_answer = ','.join([str(x) for x in multi])
+        elif question.question_type == 'true_false':
+            # For true/false, read from radio button (value will be 'true' or 'false')
+            question.correct_answer = request.POST.get('correct_choice_tf', '').lower()
         else:
             question.correct_answer = request.POST.get('correct_answer', '')
         question.explanation = request.POST.get('explanation', '')
-        # Store difficulty as integer value (1-5)
-        try:
-            question.difficulty_score = int(float(request.POST.get('difficulty_score', 3) or 3))
-        except Exception:
-            question.difficulty_score = 3
         question.save()
 
         # Update choices (simple approach: delete existing and recreate)
+        question.choices.all().delete()
+        
         if question.question_type in ['mcq_single', 'mcq_multiple']:
-            question.choices.all().delete()
             for i in range(4):
                 ctext = request.POST.get(f'choice_{i}', '').strip()
                 if ctext:
@@ -532,9 +596,21 @@ def edit_question(request, question_id):
                             choice_obj.save()
                     except Exception:
                         continue
-        else:
-            # Non-MCQ types: remove any choices for cleanliness
-            question.choices.all().delete()
+        elif question.question_type == 'true_false':
+            # Create True and False choices for true/false questions
+            correct_answer = str(question.correct_answer).lower().strip()
+            Choice.objects.create(
+                question=question,
+                choice_text='True',
+                is_correct=(correct_answer == 'true'),
+                order=0
+            )
+            Choice.objects.create(
+                question=question,
+                choice_text='False',
+                is_correct=(correct_answer == 'false'),
+                order=1
+            )
 
         messages.success(request, 'Question updated successfully.')
         return redirect('quiz:edit_quiz', quiz_id=quiz.id)
@@ -543,11 +619,22 @@ def edit_question(request, question_id):
     choices = list(question.choices.all())
     # Compute which choice indices are marked correct (if stored as comma-separated indices)
     correct_indices = []
-    if question.correct_answer:
-        try:
-            correct_indices = [int(x.strip()) for x in question.correct_answer.split(',') if x.strip()!='']
-        except Exception:
-            correct_indices = []
+    if question.question_type in ['mcq_single', 'mcq_multiple']:
+        if question.correct_answer:
+            try:
+                correct_indices = [int(x.strip()) for x in question.correct_answer.split(',') if x.strip()!='']
+            except Exception:
+                correct_indices = []
+        # Also check choices to find correct ones
+        for idx, choice in enumerate(choices):
+            if choice.is_correct:
+                if idx not in correct_indices:
+                    correct_indices.append(idx)
+    elif question.question_type == 'true_false':
+        # For true/false, find which choice is correct
+        for idx, choice in enumerate(choices):
+            if choice.is_correct:
+                correct_indices.append(idx)
 
     context = {
         'quiz': quiz,
@@ -575,13 +662,12 @@ def add_question(request, quiz_id):
             correct_answer = request.POST.get('correct_choice', '')
         elif question_type == 'mcq_multiple':
             correct_answer = ','.join(request.POST.getlist('correct_choices') or request.POST.getlist('correct_choice'))
+        elif question_type == 'true_false':
+            # For true/false, read from radio button (value will be 'true' or 'false')
+            correct_answer = request.POST.get('correct_choice_tf', '').lower()
         else:
             correct_answer = request.POST.get('correct_answer', '')
         explanation = request.POST.get('explanation', '')
-        try:
-            difficulty_score = int(float(request.POST.get('difficulty_score', 3) or 3))
-        except Exception:
-            difficulty_score = 3
 
         question = Question.objects.create(
             quiz=quiz,
@@ -589,12 +675,11 @@ def add_question(request, quiz_id):
             question_type=question_type,
             correct_answer=correct_answer,
             explanation=explanation,
-            difficulty_score=difficulty_score,
             order=quiz.questions.count(),
             ai_generated=False
         )
 
-        # If MCQ, read choices
+        # Create choices based on question type
         if question_type in ['mcq_single', 'mcq_multiple']:
             for i in range(4):
                 ctext = request.POST.get(f'choice_{i}', '').strip()
@@ -623,6 +708,21 @@ def add_question(request, quiz_id):
                             choice_obj.save()
                     except Exception:
                         continue
+        elif question_type == 'true_false':
+            # Create True and False choices for true/false questions
+            correct_answer = str(correct_answer).lower().strip()
+            Choice.objects.create(
+                question=question,
+                choice_text='True',
+                is_correct=(correct_answer == 'true'),
+                order=0
+            )
+            Choice.objects.create(
+                question=question,
+                choice_text='False',
+                is_correct=(correct_answer == 'false'),
+                order=1
+            )
 
         messages.success(request, 'Question added successfully.')
         return redirect('quiz:edit_quiz', quiz_id=quiz.id)
@@ -902,17 +1002,6 @@ def _generate_quiz_insights(attempt):
         'total_questions': attempt.total_questions,
     }
     
-    # Get difficulty breakdown
-    difficulty_breakdown = {}
-    for answer in attempt.answers.all():
-        difficulty = answer.question.difficulty_score
-        if difficulty not in difficulty_breakdown:
-            difficulty_breakdown[difficulty] = {'correct': 0, 'total': 0}
-        difficulty_breakdown[difficulty]['total'] += 1
-        if answer.is_correct:
-            difficulty_breakdown[difficulty]['correct'] += 1
-    
-    attempt_data['difficulty_breakdown'] = difficulty_breakdown
     
     # Generate insights
     insights_data = gemini_service.generate_quiz_insights(attempt_data)

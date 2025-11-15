@@ -223,11 +223,11 @@ class AIGenerator {
 
     async handleModalClose() {
         // Send cancellation request to backend
-        if (this.isGenerating) {
+        if (this.isGenerating || this._state === 'generating' || this._state === 'pending') {
             const quizId = this.generateButton?.dataset?.quizId;
             if (quizId) {
                 try {
-                    await fetch(`/cancel-ai-generation/${quizId}/`, {
+                    const cancelResp = await fetch(`/cancel-ai-generation/${quizId}/`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
@@ -235,7 +235,18 @@ class AIGenerator {
                         },
                         credentials: 'same-origin'
                     });
-                    console.log('Cancellation request sent to backend');
+                    const cancelData = await cancelResp.json();
+                    console.log('Cancellation request sent to backend', cancelData);
+                    
+                    // Refresh the questions list to remove any partially generated questions
+                    if (cancelData.deleted_questions > 0) {
+                        try {
+                            await this.refreshQuestionsList(quizId);
+                            await this.refreshQuizStats(quizId);
+                        } catch (e) {
+                            console.error('Error refreshing after cancel', e);
+                        }
+                    }
                 } catch (err) {
                     console.error('Error sending cancellation request:', err);
                 }
@@ -447,16 +458,41 @@ class AIGenerator {
                 return;
             }
 
-            if (data && data.success) {
-                // Success: update UI and questions
-                this.updateQuestionsList(data.questions || []);
+            // Handle duplicate response (shouldn't happen now, but handle gracefully)
+            if (data && data.duplicate) {
+                console.log('Duplicate generation detected:', data.message);
+                this._state = 'error';
+                this.showError(data.message || 'Questions already generated for this quiz.');
+                this.isGenerating = false;
+                this.currentAbortController = null;
+                this.hideLoading();
+                // Refresh to show existing questions
                 try {
                     await this.refreshQuestionsList(quizId);
                     await this.refreshQuizStats(quizId);
                 } catch (e) {
-                    console.error(e);
+                    console.error('Error refreshing after duplicate', e);
                 }
-                this.showSuccess('Questions generated successfully.');
+                return;
+            }
+
+            if (data && data.success) {
+                // Success: update UI and questions
+                const questions = data.questions || [];
+                if (questions.length > 0) {
+                    this.updateQuestionsList(questions);
+                    try {
+                        await this.refreshQuestionsList(quizId);
+                        await this.refreshQuizStats(quizId);
+                    } catch (e) {
+                        console.error(e);
+                    }
+                    this.showSuccess('Questions generated successfully.');
+                } else {
+                    this._state = 'error';
+                    this.showError('No questions were generated. Please try again.');
+                    this.hideLoading();
+                }
                 this._state = 'completed';
                 this.isGenerating = false;
                 this.currentAbortController = null;
@@ -617,27 +653,24 @@ class AIGenerator {
     async handlePendingGeneration(quizId) {
         this._state = 'pending';
         
-        try {
-            this.showLoading();
-        } catch (e) {}
-
-        if (this.loadingElement) {
-            this.loadingElement.innerHTML = `
-                <div class="d-flex align-items-center justify-content-center gap-3 p-4">
-                    <div class="spinner-border text-primary" style="width: 3rem; height: 3rem;" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                    </div>
-                    <div class="h5 mb-0 text-muted">
-                        AI generation is running on the server. Please wait...
-                    </div>
-                </div>`;
-            this.loadingElement.style.display = 'block';
-            delete this.loadingElement.dataset.persist;
-        }
+        // Keep the loading message that was already shown (Generating questions this may take a moment...)
+        // Don't change it to the "AI generation is running on the server" message
 
         const maxPolls = 60;
         const intervalMs = 3000;
         let polls = 0;
+        let previousQuestionCount = 0;
+
+        // Get initial question count
+        try {
+            const statsResp = await fetch(`/quiz-stats/${quizId}/`, { credentials: 'same-origin' });
+            if (statsResp.ok) {
+                const statsData = await statsResp.json();
+                previousQuestionCount = statsData.questions_count || 0;
+            }
+        } catch (e) {
+            console.error('Error getting initial question count', e);
+        }
 
         if (this._statusPoll) {
             clearInterval(this._statusPoll);
@@ -661,14 +694,34 @@ class AIGenerator {
                     if (js && js.in_progress === false) {
                         clearInterval(this._statusPoll);
                         this._statusPoll = null;
+                        
+                        // Check if questions were actually generated
                         try {
+                            const statsResp = await fetch(`/quiz-stats/${quizId}/`, { credentials: 'same-origin' });
+                            let questionsGenerated = false;
+                            if (statsResp.ok) {
+                                const statsData = await statsResp.json();
+                                const currentQuestionCount = statsData.questions_count || 0;
+                                questionsGenerated = currentQuestionCount > previousQuestionCount;
+                            }
+                            
                             await this.refreshQuestionsList(quizId);
                             await this.refreshQuizStats(quizId);
+                            
+                            if (questionsGenerated) {
+                                this._state = 'completed';
+                                this.showSuccess('Questions generated successfully.');
+                            } else {
+                                this._state = 'error';
+                                this.showError('No questions were generated. Please try again.');
+                                this.hideLoading();
+                            }
                         } catch (e) {
                             console.error(e);
+                            // If we can't verify, still show success but log the error
+                            this._state = 'completed';
+                            this.showSuccess('Questions generated successfully.');
                         }
-                        this._state = 'completed';
-                        this.showSuccess('Questions generated successfully.');
                         this.resetButton();
                         return;
                     }
@@ -733,7 +786,6 @@ class AIGenerator {
                         ${aiBadge}
                     </div>
                 </div>
-                <small class="text-muted">Difficulty: ${question.difficulty_score}/5.0</small>
             </div>
         `;
         return div;

@@ -1,6 +1,5 @@
 from django.db import models
 from django.contrib.auth.models import User
-from django.core.validators import MinValueValidator, MaxValueValidator
 import uuid
 import random
 import string
@@ -92,11 +91,6 @@ class Question(models.Model):
     explanation = models.TextField(blank=True, null=True)
     image_url = models.URLField(blank=True, null=True)
     ai_generated = models.BooleanField(default=False)
-    difficulty_score = models.FloatField(
-        validators=[MinValueValidator(1.0), MaxValueValidator(5.0)],
-        default=1.0,
-        help_text="Difficulty score from 1.0 (easy) to 5.0 (hard)"
-    )
     order = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

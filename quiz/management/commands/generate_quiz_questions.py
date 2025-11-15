@@ -37,7 +37,6 @@ class Command(BaseCommand):
                 question_type=q.get('question_type','short_answer'),
                 correct_answer=q.get('correct_answer',''),
                 explanation=q.get('explanation',''),
-                difficulty_score=q.get('difficulty_score',3.0),
                 order=quiz.questions.count() + i,
                 ai_generated=True
             )
@@ -52,6 +51,21 @@ class Command(BaseCommand):
                     correct_indices = []
                 for idx, ct in enumerate(choices):
                     Choice.objects.create(question=question, choice_text=ct, is_correct=(idx in correct_indices), order=idx)
+            elif q.get('question_type') == 'true_false':
+                # Create True and False choices for true/false questions
+                correct_answer = str(q.get('correct_answer', '')).lower().strip()
+                Choice.objects.create(
+                    question=question,
+                    choice_text='True',
+                    is_correct=(correct_answer == 'true'),
+                    order=0
+                )
+                Choice.objects.create(
+                    question=question,
+                    choice_text='False',
+                    is_correct=(correct_answer == 'false'),
+                    order=1
+                )
 
             AIMetadata.objects.create(question=question, temperature_used=0.7, repetition_penalty=1.1, generation_prompt=f'Generated for CLI: {quiz.topic}')
             created += 1

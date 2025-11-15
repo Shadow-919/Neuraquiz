@@ -27,8 +27,8 @@ class ChoiceInline(admin.TabularInline):
 
 @admin.register(Question)
 class QuestionAdmin(admin.ModelAdmin):
-    list_display = ['text', 'quiz', 'question_type', 'difficulty_score', 'ai_generated', 'order']
-    list_filter = ['question_type', 'ai_generated', 'difficulty_score', 'created_at']
+    list_display = ['text', 'quiz', 'question_type', 'ai_generated', 'order']
+    list_filter = ['question_type', 'ai_generated', 'created_at']
     search_fields = ['text', 'quiz__title']
     inlines = [ChoiceInline]
     readonly_fields = ['id', 'created_at', 'updated_at']
