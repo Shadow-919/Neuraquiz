@@ -67,6 +67,40 @@ questions = parse_questions(response.text)
 
 ---
 
+## 🌐 Project UI Screens
+
+### 🖥️ Landing Page
+
+<p align="center">
+  <img src="assets/L1.JPG" width="80%" />
+  <img src="assets/L2.JPG" width="80%" />
+  <img src="assets/L3.JPG" width="80%" />
+  <img src="assets/L4.JPG" width="80%" />
+</p>
+
+### 🧾 Caption Generation Page
+
+<p align="center">
+  <img src="assets/C1.JPG" width="80%" />
+</p>
+
+---
+
+## 🖼️ Caption Outputs (Sample Results)
+
+<table align="center">
+  <tr>
+    <td><img src="assets/O1.JPG" width="100%"></td>
+    <td><img src="assets/O2.JPG" width="100%"></td>
+  </tr>
+  <tr>
+    <td><img src="assets/O3.JPG" width="100%"></td>
+    <td><img src="assets/O4.JPG" width="100%"></td>
+  </tr>
+</table>
+
+---
+
 ## 🧾 License
 This project is released under the **MIT License** you are free to use, modify, and distribute it.
 
