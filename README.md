@@ -72,7 +72,7 @@ questions = parse_questions(response.text)
 ### 🖥️ Landing Page
 
 <p align="center">
-  <img src="assets/Home_page/H1.JPG" width="80%" />
+  <img src="assets/Home_page/H1.JPG" width="100%" />
   <img src="assets/Home_page/H2.JPG" width="80%" />
   <img src="assets/Home_page/H3.JPG" width="80%" />
 </p>
